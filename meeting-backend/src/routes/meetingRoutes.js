@@ -1,7 +1,7 @@
 const express = require("express");
 const crypto = require("crypto");
 const Meeting = require("../models/Meeting");
-const authMiddleware = require("../middleware/authMiddleware");
+const authMiddleware = require("../middleware/authmiddleware");
 
 const router = express.Router();
 
