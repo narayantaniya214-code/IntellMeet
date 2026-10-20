@@ -58,151 +58,112 @@ server.listen(PORT, () => {
 });
 
 
-// ===============================
-// SOCKET.IO
-// ===============================
-
+ // ===============================
+ // SOCKET.IO
+ // ===============================
 io.on("connection", (socket) => {
-
     console.log("User connected:", socket.id);
 
+    const joinRoom = async (roomId, displayName = "Guest") => {
+        if (!roomId) return;
 
-    // ===========================
-    // JOIN MEETING
-    // ===========================
+        const room = String(roomId);
+        const alreadyJoined = socket.rooms.has(room);
+        socket.data.roomId = room;
+        socket.data.displayName = displayName;
+
+        await socket.join(room);
+
+        if (alreadyJoined) return;
+
+        const users = await io.in(room).fetchSockets();
+        const otherUsers = users
+            .filter((user) => user.id !== socket.id)
+            .map((user) => ({
+                socketId: user.id,
+                displayName: user.data.displayName || "Guest"
+            }));
+
+        socket.emit("room-users", otherUsers);
+
+        socket.to(room).emit("user-joined", {
+            socketId: socket.id,
+            displayName
+        });
+
+        console.log(`Socket ${socket.id} joined meeting ${room}`);
+    };
+
+    socket.on("join-room", ({ roomId, displayName } = {}) => {
+        joinRoom(roomId, displayName);
+    });
 
     socket.on("join-meeting", (meetingId) => {
-
-        socket.join(meetingId);
-
-        console.log(
-            `Socket ${socket.id} joined meeting ${meetingId}`
-        );
-
-        socket.to(meetingId).emit("user-joined", {
-            socketId: socket.id
-        });
+        joinRoom(meetingId);
     });
 
+    const leaveRoom = async (roomId) => {
+        const room = String(roomId || socket.data.roomId || "");
+        if (!room || !socket.rooms.has(room)) return;
 
-    // ===========================
-    // LEAVE MEETING
-    // ===========================
+        await socket.leave(room);
+        socket.to(room).emit("user-left", { socketId: socket.id });
+        console.log(`Socket ${socket.id} left meeting ${room}`);
+    };
 
-    socket.on("leave-meeting", (meetingId) => {
+    socket.on("leave-room", () => leaveRoom());
+    socket.on("leave-meeting", (meetingId) => leaveRoom(meetingId));
 
-        socket.leave(meetingId);
-
-        console.log(
-            `Socket ${socket.id} left meeting ${meetingId}`
-        );
-
-        socket.to(meetingId).emit("user-left", {
-            socketId: socket.id
-        });
-    });
-
-
-    // ===========================
-    // CHAT MESSAGE
-    // ===========================
-
-    socket.on("send-message", (data) => {
-
-        const { meetingId, message } = data;
-
-        if (!meetingId || !message) {
-            return;
-        }
-
-        socket.to(meetingId).emit("receive-message", {
+    socket.on("send-message", ({ meetingId, message } = {}) => {
+        if (!meetingId || !message) return;
+        socket.to(String(meetingId)).emit("receive-message", {
             socketId: socket.id,
-            message: message,
+            message,
             timestamp: new Date()
         });
     });
 
-
-    // ===========================
-    // WEBRTC OFFER
-    // ===========================
-
-    socket.on("webrtc-offer", (data) => {
-
-        const {
-            meetingId,
-            offer,
-            targetSocketId
-        } = data;
-
-        if (!meetingId || !offer || !targetSocketId) {
-            return;
-        }
-
-        io.to(targetSocketId).emit("webrtc-offer", {
-            offer,
-            senderSocketId: socket.id
+    socket.on("chat-message", (data) => {
+        const room = socket.data.roomId;
+        if (!room || !data?.text) return;
+        socket.to(room).emit("chat-message", {
+            socketId: socket.id,
+            text: data.text
         });
     });
 
-
-    // ===========================
-    // WEBRTC ANSWER
-    // ===========================
-
-    socket.on("webrtc-answer", (data) => {
-
-        const {
-            answer,
-            targetSocketId
-        } = data;
-
-        if (!answer || !targetSocketId) {
-            return;
-        }
-
-        io.to(targetSocketId).emit("webrtc-answer", {
-            answer,
-            senderSocketId: socket.id
+    socket.on("webrtc-offer", ({ meetingId, targetSocketId, to, offer } = {}) => {
+        const target = targetSocketId || to;
+        if (!target || !offer) return;
+        io.to(target).emit("webrtc-offer", {
+            from: socket.id,
+            offer
         });
     });
 
-
-    // ===========================
-    // WEBRTC ICE CANDIDATE
-    // ===========================
-
-    socket.on("webrtc-ice-candidate", (data) => {
-
-        const {
-            candidate,
-            targetSocketId
-        } = data;
-
-        if (!candidate || !targetSocketId) {
-            return;
-        }
-
-        io.to(targetSocketId).emit(
-            "webrtc-ice-candidate",
-            {
-                candidate,
-                senderSocketId: socket.id
-            }
-        );
+    socket.on("webrtc-answer", ({ targetSocketId, to, answer } = {}) => {
+        const target = targetSocketId || to;
+        if (!target || !answer) return;
+        io.to(target).emit("webrtc-answer", {
+            from: socket.id,
+            answer
+        });
     });
 
-
-    // ===========================
-    // DISCONNECT
-    // ===========================
+    socket.on("webrtc-ice-candidate", ({ targetSocketId, to, candidate } = {}) => {
+        const target = targetSocketId || to;
+        if (!target || !candidate) return;
+        io.to(target).emit("webrtc-ice-candidate", {
+            from: socket.id,
+            candidate
+        });
+    });
 
     socket.on("disconnect", () => {
-
-        console.log(
-            "User disconnected:",
-            socket.id
-        );
+        const room = socket.data.roomId;
+        if (room) {
+            socket.to(room).emit("user-left", { socketId: socket.id });
+        }
+        console.log("User disconnected:", socket.id);
     });
-
 });
